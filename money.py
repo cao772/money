@@ -6,6 +6,8 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import ledger
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tasks (
  id TEXT PRIMARY KEY,
@@ -41,7 +43,7 @@ def connect(path):
     db = sqlite3.connect(path, timeout=10)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA foreign_keys=ON")
-    db.executescript(SCHEMA)
+    db.executescript(SCHEMA + ledger.SCHEMA)
     return db
 
 def require(value, label):
@@ -134,8 +136,8 @@ def report(db):
     return {"generated_at": now(), "task_counts": counts,
             "blocked": [t for t in tasks if t["status"] == "blocked"],
             "prepared": [t for t in tasks if t["status"] == "prepared"],
-            "actual_revenue": None, "actual_cost": None,
-            "note": "Task states are not publication, sales, settlement, or proof of income."}
+            **ledger.summary(db),
+            "note": "Financial totals cover reconciled statements in their original currencies."}
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
@@ -160,6 +162,8 @@ def main():
             f.add_argument("--reason", required=True)
     sub.add_parser("list")
     sub.add_parser("report")
+    statement = sub.add_parser("statement")
+    statement.add_argument("file", help="private reconciled statement JSON")
     a = p.parse_args()
     db = connect(a.db)
     try:
@@ -174,10 +178,12 @@ def main():
             result = {"id": a.id, "status": "blocked" if a.cmd == "block" else "prepared"}
         elif a.cmd == "list":
             result = rows(db)
+        elif a.cmd == "statement":
+            result = ledger.import_file(db, a.file)
         else:
             result = report(db)
         print(json.dumps(result, ensure_ascii=False, indent=2))
-    except (ValueError, sqlite3.Error) as exc:
+    except (ValueError, OSError, sqlite3.Error) as exc:
         p.exit(2, str(exc) + "\n")
     finally:
         db.close()
